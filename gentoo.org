@@ -1,0 +1,670 @@
+#+STARTUP: content
+#+STARTUP: inlineimages
+#+OPTIONS: ^:{}
+#+OPTIONS: toc:nil
+#+OPTIONS: date:nil
+#+latex_header: \usepackage[T2A]{fontenc}
+#+latex_header: \usepackage[utf8]{inputenc}
+#+latex_header: \usepackage[russian,english]{babel}
+#+PROPERTY: header-args :exports results :eval never-export
+#+LANGUAGE: ru
+#+TITLE: Gentoo notes
+#+AUTHOR: Zloi Engineer
+
+* Окружение рабочего стола X11
+$ - означает ввод команды обычным пользователем, # - ввод команды от root
+конструкция `cat <<EOF > FILE ... EOF` позволяет наполнить файл FILE многострочными данными, до тех пор пока очередная строка не будет равна EOF (вместо EOF можно использовать любое уникальное сочетание)
+
+** xorg-server i3wm
+*** USE флаги
+Перед сборкой Xов и WM нужно добавить USE флаги
+#+BEGIN_SRC bash
+# grep USE /etc/portage/make.conf
+USE="xft elogind xinerama pulseaudio savedconfig dbus"
+#+END_SRC
+
+xft нужен для поддержки HiDPI шрифтов
+elogind это легковесная замена systemd-logind не тянущая по зависимостям systemd
+
+*** Установка xorg-server и i3wm
+#+BEGIN_SRC bash
+# emerge -a x11-wm/i3 x11-misc/i3lock x11-misc/i3status x11-base/xorg-server x11-apps/xinit
+# rc-update add elogind boot
+#+END_SRC
+
+https://wiki.gentoo.org/wiki/Xorg/Guide/ru
+https://wiki.gentoo.org/wiki/I3
+*** Настройка переключения раскладок клавиатуры:
+
+#+BEGIN_SRC bash
+# emerge -a x11-apps/setxkbmap
+$ # показать текущую конфигурацию
+$ setxkbmap -query
+$ # русская и английская раскладка, переключаемая по CapsLock
+$ setxkbmap -layout us,ru -option grp:caps_toggle -option grp_led:caps
+$ # настройка, которая будет активироваться автоматически при запуске Xorg
+$ cat <<EOF > /etc/X11/xorg.conf.d/10-keyboard.conf
+Section "InputClass"
+    Identifier "keyboard-all"
+    Driver "evdev"
+    Option "XkbLayout" "us,ru"
+    Option "XkbOptions" "grp:caps_toggle,grp_led:caps"
+    MatchIsKeyboard "on"
+EndSection
+EOF
+#+END_SRC
+
+https://wiki.gentoo.org/wiki/Keyboard_layout_switching/ru
+*** Тюннинг настроек тачпада:
+
+#+BEGIN_SRC bash
+# cat <<EOF > /etc/X11/xorg.conf.d/40-libinput.conf
+Section "InputClass"
+	Identifier "libinput touchpad catchall"
+	MatchIsTouchpad "on"
+	MatchDevicePath "/dev/input/event*"
+	Driver "libinput"
+	Option "Tapping" "True"
+ 	Option "TappingDrag" "True"	
+EndSection
+EOF
+#+END_SRC
+
+*** Шрифты и настройка HiDPI
+Шрифты-иконки и красивые шрифты для приложений.
+#+BEGIN_SRC bash
+# emerge -a media-fonts/noto-emoji media-fonts/liberation-fonts media-fonts/dejavu
+#+END_SRC
+
+На экранах с большим разрешением нужно увеличить размер шрифтов в процентном соотношении.
+Вместо 165 нужно подобрать устраивающее число.
+#+BEGIN_SRC bash
+$ echo "Xft.dpi: 165" >> ~/.Xresources
+#+END_SRC
+
+*** Создание сценария входа (для работы startx):
+#+BEGIN_SRC bash
+$ cat <<EOF > ~/.xinitrc
+#!/bin/sh
+# проверить работает ли ssh-агент можно командой
+# ssh-add -l 
+eval `ssh-agent`
+file ~/.ssh/* | grep "private key" | sed -e "s/: *.*//g" | xargs ssh-add
+# Set DPI
+xrdb -merge ~/.Xresources
+exec dbus-launch --exit-with-session i3
+EOF
+#+END_SRC
+
+https://wiki.gentoo.org/wiki/Xorg/Guide/ru#.D0.98.D1.81.D0.BF.D0.BE.D0.BB.D1.8C.D0.B7.D0.BE.D0.B2.D0.B0.D0.BD.D0.B8.D0.B5_startx
+*** Запуск
+Теперь можно запустить оконную систему
+#+BEGIN_SRC bash
+$ startx
+#+END_SRC
+
+Для выхода назад: сочетание клавиш Win+Shift+e -> Yes, exit i3
+
+*** Настройка i3status
+i3status - панель внизу экрана, которая может отображать полезную информацию.
+Для изменения конфигурации используется файл .config/i3status/config, если его нет, значит нужно скопировать его
+из /etc:
+#+begin_src
+  $ mkdir .config/i3status
+  $ cp /etc/i3status.conf .config/i3status/config
+#+end_src
+
+Например для ноутбука важно показать заряд батареи, для этого нужно добавить в .config/i3status/config:
+#+begin_src 
+battery all {
+        format = "%status %percentage %remaining"
+        format_down = "No battery"
+        status_chr = "⚡"
+        status_bat = "🔋"
+        status_unk = "?"
+        status_full = "🔋"
+}
+order += "battery all"
+#+end_src
+*Иконки:* в качестве иконки используется utf-8 символ, для его отображения
+в системе должен существовать шрифт в котором есть поддержка этих символов.
+Например в разделе [[Шрифты и настройка HiDPI][Шрифты и настройка HiDPI]] был установлен _media-fonts/noto-emoji_
+
+Пример других полезных данных:
+
+#+begin_src
+order += "disk /"
+order += "cpu_temperature 0"
+order += "cpu_usage 0"
+order += "memory"
+order += "tztime local"
+
+disk "/" {
+        format = "%avail"
+}
+
+cpu_temperature 0 {
+	format = "%degrees°C"
+    # path = "/sys/devices/platform/coretemp.0/hwmon/hwmon5/temp1_input"
+}
+
+memory {
+        format = "%used/%total"
+        threshold_degraded = "1G"
+        format_degraded = "MEMORY < %available"
+}
+
+tztime local {
+        format = "%d.%m %H:%M"
+}
+#+end_src
+
+https://i3wm.org/i3status/manpage.html
+** GUI утилиты для создания DE
+DE - desktop environment это набор программ и настроек которые создают "среду".
+
+https://wiki.gentoo.org/wiki/Recommended_applications
+*** Эмулятор терминала
+Без софта в i3 особо ничего не сделаешь - нужен хотябы эмулятор терминала, например alacritty.
+
+#+BEGIN_SRC bash
+# emerge -a x11-terms/alacritty
+#+END_SRC
+
+
+*** Запускатор программ
+Rofi - запускатор программ с историей и автодополнением. Например запустив 1 раз через него firefox-bin
+во все последующие разы для запуска достаточно нажать клавишу f и Enter для подтверждения самого верхнего варианта из подсказаных rofi.
+#+BEGIN_SRC bash
+  # emerge -a x11-misc/rofi
+#+END_SRC
+    
+Для его интерации в i3 необходимо отредактировать файл `~/.config/i3/config` добавив строки
+#+BEGIN_SRC bash
+  bindsym $mod+d exec rofi -show run
+  bindsym mod1+Tab exec rofi -show window
+#+END_SRC
+
+*** Управление громкостью звука
+Для управления звуком можно использовать CLI утилиту pulseaudio добавив в конфиг i3:
+#+BEGIN_SRC bash
+bindsym XF86AudioLowerVolume exec "pactl set-sink-volume @DEFAULT_SINK@ -5%"
+bindsym XF86AudioRaiseVolume exec "pactl set-sink-volume @DEFAULT_SINK@ +5%"
+# bindsym XF86AudioMute exec "pactl set-sink-volume @DEFAULT_SINK@ 0%"
+bindsym XF86AudioMute exec "pactl set-sink-mute @DEFAULT_SINK@ toggle"
+#+END_SRC
+
+Для отображения текущей громкости в i3status нужно добавить в .config/i3status/config
+#+begin_src
+  volume master {
+        format = "♪%volume"
+        format_muted = "♪X(%volume)"
+        device = "default"
+        mixer = "Master"
+        mixer_idx = 0
+  }
+  order += "volume master"
+#+end_src
+
+*** Создание well-known директорий (Downloads, Pictures, Documents...)
+xdg-user-dirs создает набор стандартных директорий (Download, Pictures и т.п.)
+которые используют по умолчанию многие GUI приложения, для того чтобы они назывались по английски
+(т.е. при работе с ними из терминала не приходилось переключать раскладку)
+нужно 1 раз запустить утилиту с установленной английской локалью:
+
+#+BEGIN_SRC bash
+  # emerge -a x11-misc/xdg-user-dirs
+  $ LANG=C xdg-user-dirs-update
+#+END_SRC
+
+*** Нескучные обои
+Для установки обоев feh:
+#+BEGIN_SRC bash
+  # emerge -a media-gfx/feh
+  $ feh --bg-scale ~/Pictures/wallpaper.png
+#+END_SRC
+
+Для того чтобы обои восстанавливались после перезапуска feh создает файл .fehbg в домашней директории пользователя,
+его нужно запустить например из .config/i3/config:
+
+#+BEGIN_SRC bash
+  exec_always --no-startup-id "~/.fehbg"
+#+END_SRC
+
+*** Всплывашка уведомлений от приложений
+Dunst отображает уведомления.
+
+#+begin_src bash
+   # emerge -a x11-misc/dunst
+#+end_src
+
+после установки его необходимо запустить, например добавив в .config/i3/config:
+
+#+BEGIN_SRC
+exec dunst
+#+END_SRC
+
+Для проверки его работоспособности:
+#+BEGIN_SRC bash
+$ notify-send hello
+#+END_SRC
+
+https://wiki.gentoo.org/wiki/Dunst
+*** Композитный менеджер
+Композитный менеджер для красоты (плавность, прозрачность, отсутствие артефактов изображения при переключении экранов)
+
+#+BEGIN_SRC bash
+# emerge -a x11-misc/picom
+$ cat <<EOF > .config/picom.conf
+cat .config/compton.conf
+fading=true;
+no-dock-shadow=true;
+inactive-opacity=0.8;
+# active-opacity=0.9;
+wintypes: {
+  # unknown = { focus=false; };
+  # desktop = { focus=false; };
+  # dock = { focus=false; };
+  # splash = { focus=false; };
+  # normal = { focus=false; };
+  # notify = { focus=false; };
+  # combo = { focus=false; };
+  # dnd = { focus=false; };
+  # tooltip       = { focus=false; };
+  # dialog        = { focus=false; };
+  # toolbar       = { focus=false; };
+  # dropdown_menu = { focus=false; };
+  # popup_menu    = { focus=false; };
+  # menu          = { focus=false; };
+  # firefox suggests
+  utility       = { fade=false; focus=true; };
+};
+fade-delta=5;
+focus-exclude=[
+  "name='i3lock'"
+  ,"class_g = 'Rofi'"
+];
+
+mark-ovredir-focused=true;
+mark-wmwin-focused=true;
+# telegram not become transparent while stil focused
+use-ewmh-active-win = true;
+detect-transient=true;
+detect-client-leader=true;
+detect-client-opacity = true;
+EOF
+#+BEGIN_END
+
+Также его необходимо запускать в .config/i3/config:
+#+BEGIN_SRC bash
+exec --no-startup-id picom --daemon
+#+END_SRC
+
+https://wiki.gentoo.org/wiki/Picom
+*** Браузер
+Сборка firefox из исходников займет приличное время, по этому для быстрого старта можно воспользоваться бинарной сборкой:
+
+#+BEGIN_SRC bash
+# emerge --ask firefox-bin
+#+END_SRC
+
+*** Графический файловый менеджер
+pcmanfm - легковесный, но полнофункциональный графический файловый менеджер.
+К сожалению он находится в числе замаскированых пакетов (видимо не был оттестирован для x86_64), по этому сначала нужно разрешить его установку.
+путем добавления исключения ~amd64 в accept_keywords:
+#+BEGIN_SRC bash
+    # cat <<EOF >> /etc/portage/package.accept_keywords/zz-autounmask
+# required by x11-misc/pcmanfm-1.3.2-r1::gentoo
+# required by x11-misc/pcmanfm (argument)
+=x11-libs/libfm-1.3.2-r1 ~amd64
+# required by x11-misc/pcmanfm (argument)
+=x11-misc/pcmanfm-1.3.2-r1 ~amd64
+EOF
+    # emerge -a x11-misc/pcmanfm
+#+END_SRC
+
+Подробнее про размаскирование пакетов:
+https://wiki.gentoo.org/wiki/Knowledge_Base:Unmasking_a_package
+https://wiki.gentoo.org/wiki/Knowledge_Base:Accepting_a_keyword_for_a_single_package
+
+https://wiki.gentoo.org/wiki/PCManFM
+
+*** Графический архиватор (с интеграцией в pcmanfm)
+#+begin_src bash
+  # emerge -a app-arch/engrampa
+#+end_src
+
+После установки в pcmanfm появятся пункты контекстного меню для разархивации и создания архива.
+
+*** Простой текстовый редактор
+#+begin_src bash
+  # emerge -a app-editors/mousepad
+#+end_src
+*** Скриншоты
+Библиотека libmagick имеет в своем составе ряд утилит для создания и конвертации изображений, в том числе она может делать скриншоты.
+#+begin_src
+  # emerge --ask media-gfx/imagemagick x11-misc/xclip
+#+end_src
+xclip - утилита для работы с буфером обмена из CLI.
+
+Теперь нужно добавить в .config/i3/config сочетания клавишь
+#+begin_src
+bindsym Print exec "sleep 0.2; import png:- | xclip -selection clipboard -t image/png"
+bindsym control+Print exec "sleep 0.2; import png:/tmp/scr_$(date --iso-8601=seconds).png | xclip -selection clipboard -t image/png"
+#+end_src
+Нажатие PrtSc позволит сделать скриншот и сохранить его в буфер обмена, Ctrl-PrtSc сохранит скриншот в /tmp
+
+https://wiki.gentoo.org/wiki/ImageMagick
+*** Видеоплеер
+#+begin_src bash
+  # emerge -a media-video/mpv
+  $ mkdir .config/mpv
+  $ echo hwdec=auto > .config/mpv/mpv.conf
+#+end_src
+*** PDF
+#+begin_src bash
+  # echo "app-text/evince djvu" > /etc/portage/package.use/evince
+  # emerge -a app-text/evince
+#+end_src
+*** Монтирование флешек
+Добавить в USE флаги в /etc/portage/make.conf udisk policykit.
+#+begin_src bash
+  # emerge -a sys-fs/udiskie sys-auth/polkit
+#+end_src
+
+Должна заработать интеграция с pcmanfm.
+Также, работает из терминала:
+#+begin_src
+  $ udisksctl mount -b /dev/sda1
+#+end_src
+
+https://wiki.gentoo.org/wiki/Udisks
+https://wiki.gentoo.org/wiki/Polkit
+*** Блокировка экрана
+#+begin_src
+  # sudo emerge -a x11-misc/xautolock x11-apps/xrandr
+  $ mkdir ~/bin
+  $ cat <<EOF > ~/bin/screen_lock
+#!/bin/sh -e
+
+SCREEN_RES=$(xrandr | grep "primary" | sed 's/.*primary \([0-9]*x[0-9]*\)+.*/\1/g')
+# Take a screenshot
+[ -f /tmp/screen_locked.png ] && rm -f /tmp/screen_locked.png
+import -window root /tmp/screen_locked.png
+
+# Pixellate it 10x
+mogrify -scale 10% -scale 1000% /tmp/screen_locked.png
+
+# Lock screen displaying this image.
+# если есть проблемы с прозрачностью i3lock
+# pkill picom |:
+flock -n /tmp/screen_lock.lock -c "i3lock -n -f -i /tmp/screen_locked.png"
+# если перед блокировкой убивали picom - нужно его перезапустить
+# flock -n /tmp/screen_lock.lock -c "i3lock -n -f -i /tmp/screen_locked.png; picom -b"  
+EOF
+  $ chmod +x ~/bin/screen_lock
+  $ cat <<EOF >> ~/.config/i3/config
+bindsym control+mod1+l exec "~/bin/screen_lock"
+exec "xautolock -time 3 -locker '~/bin/screen_lock' -notify 10 -notifier 'notify-send \"Screen lock in 10 seconds...\"' &"
+EOF
+#+end_src
+
+Теперь для блокировки экрана нужно нажать Ctrl-Alt-l.
+Также, экран автоматически заблокируется через 3 минуты с предупреждением об этом за 10 секунд.
+** Оформление и темы
+Это очень обширный вопрос, существует множество скриптов автоматизации, которые накладывают различные настройки цветов,
+в том числе для разных программ в отдельности и в .Xresources.
+Пока что рассмотрим простой, ручной способ частичной настройки оформления.
+
+В файле .config/i3/config нужно найти часть конфигурации
+#+begin_example
+# Start i3bar to display a workspace bar (plus the system information i3status
+# finds out, if available)
+bar {
+        status_command i3status
+}
+#+end_example
+
+и заменить ее на
+#+begin_src
+# $i3-theme-window
+# solarized accents
+set $yellow	#b58900
+set $orange	#cb4b16
+set $red	#dc322f
+set $magenta	#d33682
+set $violet	#6c71c4
+set $blue	#268bd2
+set $cyan	#2aa198
+set $green	#859900
+
+# solarized light
+set $baseA3 #fdf6e3
+set $baseA2 #eee8d5
+set $baseA1 #93a1a1
+set $baseA0 #839496
+set $baseB0 #657b83
+set $baseB1 #586e75
+set $baseB2 #073642
+set $baseB3 #002b36
+set $custom #e1cab3
+
+# $i3-background
+exec_always --no-startup-id xsetroot -solid '$baseA2'
+
+###################
+# solarized (clean)
+###################
+# clientclass 			border  backgr. text 	indicator
+client.focused 			$green	$green	$baseB3 $blue
+client.focused_inactive		$cyan	$cyan	$baseB2 $violet
+client.unfocused  		$baseA2 $baseA2 $baseB1 $baseA1
+#client.urgent 	 		$orange $orange $baseB3 $red
+client.urgent 	 		$yellow $yellow $baseB3 $orange
+
+# $i3-theme-bar
+bar {
+colors {
+ 	# status
+	separator $blue
+ 	background $baseA3
+	statusline $baseB2
+
+ 	###################
+	# solarized (clean)
+	###################
+ 	# workclass 			border  backgr. text
+ 	focused_workspace		$green  $green  $baseA3
+ 	active_workspace		$cyan   $cyan   $baseA2
+ 	inactive_workspace		$baseA2 $baseA2 $baseB1
+ 	urgent_workspace		$orange $orange $baseB3
+ 	#urgent_workspace		$yellow $yellow $baseB3
+}
+    status_command i3status
+}
+#+end_src
+
+В файле .config/i3status/config нужно найти
+#+begin_example
+general {
+        colors = true
+        interval = 5
+}
+#+end_example
+
+и заменить на
+#+begin_src
+general {
+	colors = true
+	interval = 5
+	color_bad = "#DC322F"
+	color_degraded = "#b58900"
+	color_good = "#859900"
+}
+#+end_src
+
+Уведомления dunst:
+#+begin_src
+  $ mkdir .config/dunst/
+  $ cat <<EOF > .config/dunst/dunstrc
+  [urgency_low]
+    background = "#eee8d5"
+    foreground = "#586e75"
+    frame_color = "#2aa198"
+    timeout = 10
+
+[urgency_normal]
+    background = "#eee8d5"
+    foreground = "#586e75"
+    frame_color = "#859900"
+    timeout = 10
+
+[urgency_critical]
+    background = "#eee8d5"
+    foreground = "#586e75"
+    frame_color = "#6c71c4"
+    timeout = 0
+EOF
+#+end_src
+** Использование видео карты и аппартных кодеков
+#+begin_src bash
+  # echo "media-video/ffmpeg encode libdrm libv4l mp3 network openal opencl openh264 opus truetype v4l vorbis wepb x264 x265 zlib" > etc/portage/package.use/ffmpeg
+#+end_src
+
+Добавить в глобальный USE в /etc/portage/make.conf vaapi.
+
+
+#+begin_src bash
+# emerge -a x11-apps/mesa-progs media-video/libva-utils media-libs/libva-intel-media-driver x11-apps/igt-gpu-tools
+#+end_src
+
+Вызов vainfo покажет поддерживаемые кодеки и используемый драйвер:
+#+begin_src
+$ vainfo
+Trying display: x11
+libva info: VA-API version 1.21.0
+libva info: Trying to open /usr/lib64/va/drivers/iHD_drv_video.so
+libva info: Found init function __vaDriverInit_1_21
+libva info: va_openDriver() returns 0
+vainfo: VA-API version: 1.21 (libva 2.21.0)
+vainfo: Driver version: Intel iHD driver for Intel(R) Gen Graphics - 24.1.5 ()
+vainfo: Supported profile and entrypoints
+      VAProfileNone                   :	VAEntrypointVideoProc
+      VAProfileNone                   :	VAEntrypointStats
+      VAProfileMPEG2Simple            :	VAEntrypointVLD
+      VAProfileMPEG2Simple            :	VAEntrypointEncSlice
+      VAProfileMPEG2Main              :	VAEntrypointVLD
+      VAProfileMPEG2Main              :	VAEntrypointEncSlice
+      VAProfileH264Main               :	VAEntrypointVLD
+      VAProfileH264Main               :	VAEntrypointEncSlice
+      VAProfileH264Main               :	VAEntrypointFEI
+      VAProfileH264Main               :	VAEntrypointEncSliceLP
+      VAProfileH264High               :	VAEntrypointVLD
+      VAProfileH264High               :	VAEntrypointEncSlice
+      VAProfileH264High               :	VAEntrypointFEI
+      VAProfileH264High               :	VAEntrypointEncSliceLP
+  ...
+#+end_src
+
+Проверить использует ли X11 direct rendering:
+#+begin_src
+  $ glxinfo | grep rendering
+direct rendering: Yes
+#+end_src
+
+igt-gpu-tools содержит утилиты для мониторинга встроенной gpu:
+#+begin_src bash
+  # intel_gpu_top
+#+end_src
+
+Если Video >0% значит используется GPU
+
+
+В firefox зайти в about:support и найти раздел Медиа -> Аппаратное декодирование
+Поставить расширение enchanced-h264ify и выключить в нем те кодеки аппаратной поддержки которых нет.
+Проверить по intel_gpu_top что при проигрывании видео на ютубе используется аппаратное декодирование.
+На ютубе ПКМ -> Скопировать данные для отладки -> поле fmt будет сожерать номер формата,
+сделав на видео yt-dlp -F  можно посмотреть что это за формат
+
+https://wiki.gentoo.org/wiki/Intel
+https://wiki.gentoo.org/wiki/Xorg/Hardware_3D_acceleration_guide
+https://wiki.gentoo.org/wiki/VAAPI
+
+https://trac.ffmpeg.org/wiki/Hardware/VAAPI
+https://trac.ffmpeg.org/wiki/Hardware/QuickSync
+** Сон suspend/hibernate
+Должно работать из коробки
+
+https://wiki.gentoo.org/wiki/Suspend_and_hibernate
+** Шифрование
+#+begin_src bash
+  # echo "sys-fs/ecryptfs-utils ~amd64" >> /etc/portage/package.accept_keywords/zz-autounmask
+  # emerge -a sys-fs/ecryptfs-utils sys-fs/cryptsetup
+  # echo ecryptfs >> /etc/modules-load.d/ecryptfs
+  # cat <<EOF >>/etc/pam.d/system-auth
+auth		optional	pam_ecryptfs.so unwrap
+session		optional	pam_ecryptfs.so unwrap
+EOF
+  # ecryptfs-migrate-home -u USERNAME
+#+end_src
+
+
+
+*** Swap
+В /etc/fstab закомментировать swap и добавить:
+#+begin_src
+  /dev/mapper/cryptswap1 none swap sw 0 0
+#+end_src
+
+В файл /etc/conf.d/dmcrypt добавить:
+#+begin_src
+swap=cryptswap1
+#source=UUID='3e8426b9-3a77-4fa7-96c7-fc05e0e3921e'
+source=/dev/nvme0n1p2
+options='--cipher=aes-xts-plain64 --key-size=512 --key-file=/dev/urandom'
+#+end_src
+
+#+begin_src bash
+  # rc-config add dmcrypt boot
+#+end_src
+
+https://wiki.gentoo.org/wiki/ECryptfs
+** TODO Как пользоваться
+*При использовании rofi*: все последующие раз кроме 1ого он будет подсказывать
+при начале набора части команды ее оставшуюся часть, в таблице приведены аббревиатуры
+для сокращения нажатий после того как однажды команда уже будет использована:
+достаточно начать писать часть команды и нажать энтер когда в самом верху будет предложена искомая.
+
+|------------------------------------+--------------------------------------------------------|
+| вход                               | startx                                                 |
+| выход в терминал                   | Win-Shift-e                                            |
+| выключение                         | Win-D "loginctl poweroff" (все разы после 1го: "po")   |
+| Suspend                            | Win-D "loginctl suspend" (все разы после 1го: "sus")   |
+| Hibernate                          | Win-D "loginctl hibernate" (все разы после 1го: "hib") |
+| открыть браузер                    | Win-D firefox (все разы после 1го: "fi" )              |
+| открыть файловый менеджер          | Win-D pcmanfm (все разы после 1го: "fm")               |
+| блокировка экрана                  | Ctrl-Alt-l                                             |
+|                                    |                                                        |
+| открыть эмулятор терминала         | Win-Enter                                              |
+| закрыть окно                       | Win-Shift-Q                                            |
+| Перейти на рабочее место №         | Win-<число>                                            |
+| Перетащить окно на рабочее место № | Win-Shift-<число>                                      |
+| Переместить фокус на другое окно   | Win-<стрелка влево> или Win-<стрелка вправо>           |
+|------------------------------------+--------------------------------------------------------|
+
+Документация по сочетаниям клавиш в i3wm
+https://i3wm.org/docs/userguide.html
+** Консольные утилиты
+#+BEGIN_SRC bash
+# emerge -a app-admin/sudo app-editors/vim app-misc/mc sys-process/htop dev-vcs/git sys-apps/lm-sensors
+#+END_SRC
+
+
+Использовать более быстрый dash для скриптов вместо /bin/sh -> /bin/bash
+#+begin_src bash
+  # echo "app-alternatives/sh -bash dash" > /etc/portage/package.use/sh
+  # emerge -a app-alternatives/sh
+#+end_src
+
+https://wiki.gentoo.org/wiki/Dash
+https://wiki.gentoo.org/wiki/Shell#Configuration
